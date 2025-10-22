@@ -34,6 +34,9 @@ done
 ########################################
 # Interactive input (if needed)
 ########################################
+########################################
+# Interactive input (if needed)
+########################################
 read_input() {
   : "${GIT_URL:=$(printf '' ; read -p 'Git repository URL (https://...): ' REPLY && printf '%s' "$REPLY")}"
   : "${PAT:=$(printf '' ; read -s -p 'Personal Access Token (press Enter if public): ' REPLY && printf '%s' "$REPLY" && echo)}"
@@ -41,7 +44,7 @@ read_input() {
   : "${REMOTE_USER:=$(printf '' ; read -p 'Remote SSH username: ' REPLY && printf '%s' "$REPLY")}"
   : "${REMOTE_HOST:=$(printf '' ; read -p 'Remote server IP/hostname: ' REPLY && printf '%s' "$REPLY")}"
   : "${SSH_KEY:=$(printf '' ; read -p 'SSH key path (e.g. ~/.ssh/id_rsa): ' REPLY && printf '%s' "$REPLY")}"
-  : "${CONTAINER_PORT:=$(printf '' ; read -p 'Application port (e.g. 3000): ' REPLY && printf '%s' "$REPLY")}"
+  : "${APP_PORT:=$(printf '' ; read -p 'Application port (e.g. 3000): ' REPLY && printf '%s' "$REPLY")}"
   : "${REMOTE_PROJECT_DIR:=$(printf '' ; read -p 'Remote project directory (optional, leave blank for default): ' REPLY && printf '%s' "$REPLY")}"
 
   # Runtime selection prompt
@@ -113,8 +116,13 @@ read_input() {
       ;;
   esac
 
+  # Initialize optional variables to avoid unbound errors
+  : "${PYTHON_VERSION:=default}"
+  : "${NODE_VERSION:=18}"
+  : "${PHP_VERSION:=8.1}"
+
   # basic validation
-  if [ -z "$GIT_URL" ] || [ -z "$REMOTE_USER" ] || [ -z "$REMOTE_HOST" ] || [ -z "$SSH_KEY" ] || [ -z "$CONTAINER_PORT" ]; then
+  if [ -z "$GIT_URL" ] || [ -z "$REMOTE_USER" ] || [ -z "$REMOTE_HOST" ] || [ -z "$SSH_KEY" ] || [ -z "$APP_PORT" ]; then
     die "Missing required input (git url, remote user/host, ssh key, or application port)."
   fi
 
@@ -253,7 +261,7 @@ echo "npm installed: \$(npm --version)"
 NODE_SETUP
       ;;
 
-    python)
+      python)
       ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${REMOTE_USER}@${REMOTE_HOST}" /bin/bash <<'PYTHON_SETUP'
 set -euo pipefail
 
@@ -265,20 +273,10 @@ fi
 sudo apt-get update
 sudo apt-get install -y python3 python3-pip python3-venv
 
-# Install specific version if requested
-if [ "$PYTHON_VERSION" = "3.11" ]; then
-    sudo apt-get install -y software-properties-common
-    sudo add-apt-repository -y ppa:deadsnakes/ppa
-    sudo apt-get update
-    sudo apt-get install -y python3.11 python3.11-venv python3.11-dev
-    sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
-elif [ "$PYTHON_VERSION" = "3.10" ]; then
-    sudo apt-get install -y software-properties-common
-    sudo add-apt-repository -y ppa:deadsnakes/ppa
-    sudo apt-get update
-    sudo apt-get install -y python3.10 python3.10-venv python3.10-dev
-    sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1
-fi
+# Skip version-specific installation for now
+# if [ "$PYTHON_VERSION" = "3.11" ]; then
+#     ... version installation code ...
+# fi
 
 echo "Python3 installed: $(python3 --version)"
 echo "pip3 installed: $(pip3 --version)"
@@ -431,22 +429,22 @@ get_start_command() {
       
     python)
       if [ -f "$SCRIPT_DIR/$REPO_NAME/requirements.txt" ]; then
-        echo "pip3 install -r requirements.txt && python3 app.py || python3 main.py || python3 manage.py runserver 0.0.0.0:${CONTAINER_PORT}"
+        echo "./venv/bin/python app.py || ./venv/bin/python main.py || ./venv/bin/python manage.py runserver 0.0.0.0:${APP_PORT}"
       else
-        echo "python3 app.py || python3 main.py || python3 manage.py runserver 0.0.0.0:${CONTAINER_PORT}"
+        echo "./venv/bin/python app.py || ./venv/bin/python main.py || ./venv/bin/python manage.py runserver 0.0.0.0:${APP_PORT}"
       fi
       ;;
       
-    ruby)
+       ruby)
       if [ -f "$SCRIPT_DIR/$REPO_NAME/Gemfile" ]; then
-        echo "bundle install && bundle exec ruby app.rb || bundle exec rackup -p ${CONTAINER_PORT}"
+        echo "bundle install && bundle exec ruby app.rb || bundle exec rackup -p ${APP_PORT}"
       else
-        echo "ruby app.rb || rackup -p ${CONTAINER_PORT}"
+        echo "ruby app.rb || rackup -p ${APP_PORT}"
       fi
       ;;
       
     php)
-      echo "php -S 0.0.0.0:${CONTAINER_PORT} -t ."
+      echo "php -S 0.0.0.0:${APP_PORT} -t ."
       ;;
       
     static)
@@ -602,16 +600,26 @@ NODE_DEPS
       ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${REMOTE_USER}@${REMOTE_HOST}" "cd '${REMOTE_PROJECT_DIR}' && /bin/bash" <<'PYTHON_DEPS'
 set -euo pipefail
 
+echo "Creating Python virtual environment..."
+python3 -m venv venv
+
+echo "Upgrading pip in virtual environment..."
+./venv/bin/pip install --upgrade pip
+
 if [ -f "requirements.txt" ]; then
-  pip3 install -r requirements.txt
-  echo "Python dependencies installed from requirements.txt"
+  echo "Installing dependencies from requirements.txt..."
+  ./venv/bin/pip install -r requirements.txt
+  echo "✅ Python dependencies installed from requirements.txt in virtual environment"
 elif [ -f "Pipfile" ]; then
-  pip3 install pipenv
-  pipenv install --deploy
-  echo "Python dependencies installed from Pipfile"
+  echo "Installing dependencies from Pipfile..."
+  ./venv/bin/pip install pipenv
+  ./venv/bin/pipenv install --deploy
+  echo "✅ Python dependencies installed from Pipfile in virtual environment"
 else
-  echo "No requirements.txt or Pipfile found - skipping pip install"
+  echo "⚠️ No requirements.txt or Pipfile found - virtual environment created but no dependencies installed"
 fi
+
+echo "Virtual environment setup completed"
 PYTHON_DEPS
       ;;
 
@@ -726,6 +734,9 @@ SYSTEMD_START
 ########################################
 # Nginx config with SSL readiness
 ########################################
+########################################
+# Nginx config with SSL readiness
+########################################
 configure_nginx() {
   info "Configuring Nginx reverse proxy with SSL readiness"
   
@@ -736,7 +747,7 @@ configure_nginx() {
     LOCATION_CONFIG="try_files \$uri \$uri/ =404;"
   else
     UPSTREAM_CONFIG=""
-    LOCATION_CONFIG="proxy_pass http://127.0.0.1:${CONTAINER_PORT};
+    LOCATION_CONFIG="proxy_pass http://127.0.0.1:${APP_PORT};
     proxy_set_header Host \$host;
     proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -837,7 +848,7 @@ validate_deployment() {
   # Test application health (only for non-static apps)
   if [ "$APP_TYPE" != "static" ] && [ "$APP_TYPE" != "other" ]; then
     info "Testing application health..."
-    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${REMOTE_USER}@${REMOTE_HOST}" "curl -sfS --connect-timeout 10 http://127.0.0.1:${CONTAINER_PORT} >/dev/null 2>&1 && echo '✅ Application is healthy' || echo '❌ Application health check failed'" >>"$LOG_FILE" 2>&1
+    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${REMOTE_USER}@${REMOTE_HOST}" "curl -sfS --connect-timeout 10 http://127.0.0.1:${APP_PORT} >/dev/null 2>&1 && echo '✅ Application is healthy' || echo '❌ Application health check failed'" >>"$LOG_FILE" 2>&1
   fi
   
   # public reachability
