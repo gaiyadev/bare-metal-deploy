@@ -341,6 +341,18 @@ sudo nginx -t
 sudo tail -f /var/log/nginx/access.log
 ```
 
+## Copy the public key to your server:
+
+```bash
+ssh-copy-id -i ~/.ssh/your_key_name root@0.0.0.0
+```
+
+## Test the SSH connection with your key:
+
+```bash
+ssh -i ~/.ssh/your_key_name -o ConnectTimeout=10 root@0.81.0.0
+```
+
 ## Common Error Messages and Solutions
 
 Error Message Possible Cause Solution
