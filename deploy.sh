@@ -496,6 +496,9 @@ SSL_SETUP
 ########################################
 # Prepare remote environment
 ########################################
+########################################
+# Prepare remote environment
+########################################
 remote_prepare() {
   info "Preparing remote environment"
   
@@ -503,8 +506,8 @@ remote_prepare() {
   install_app_runtime
   setup_ssl_placeholder
   
-  # Verify all services
-  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${REMOTE_USER}@${REMOTE_HOST}" /bin/bash <<'VERIFY'
+  # Verify all services - pass variables explicitly
+  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${REMOTE_USER}@${REMOTE_HOST}" "APP_TYPE='$APP_TYPE' PHP_VERSION='${PHP_VERSION:-}' /bin/bash" <<'VERIFY'
 set -euo pipefail
 echo "=== Service Verification ==="
 echo "Nginx: $(nginx -v 2>&1 2>/dev/null || echo 'NOT_FOUND')"
@@ -526,7 +529,12 @@ case "$APP_TYPE" in
     ;;
   php) 
     echo "PHP: $(php --version 2>/dev/null | head -1 || echo 'NOT_FOUND')"
-    echo "PHP-FPM: $(systemctl is-active php${PHP_VERSION}-fpm 2>/dev/null || echo 'INACTIVE')"
+    # Only check PHP-FPM if PHP_VERSION is set
+    if [ -n "$PHP_VERSION" ]; then
+      echo "PHP-FPM: $(systemctl is-active php${PHP_VERSION}-fpm 2>/dev/null || echo 'INACTIVE')"
+    else
+      echo "PHP-FPM: PHP_VERSION not set"
+    fi
     ;;
   static)
     echo "Static website - runtime verified"
@@ -566,14 +574,16 @@ transfer_project() {
 ########################################
 # Install application dependencies
 ########################################
+########################################
+# Install application dependencies
+########################################
 install_dependencies() {
   info "Installing application dependencies"
   
   case "$APP_TYPE" in
     node)
-      ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${REMOTE_USER}@${REMOTE_HOST}" /bin/bash <<'NODE_DEPS'
+      ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${REMOTE_USER}@${REMOTE_HOST}" "cd '${REMOTE_PROJECT_DIR}' && /bin/bash" <<'NODE_DEPS'
 set -euo pipefail
-cd "${REMOTE_PROJECT_DIR}"
 
 if [ -f "package.json" ]; then
   if [ -f "package-lock.json" ] || [ -f "npm-shrinkwrap.json" ]; then
@@ -589,9 +599,8 @@ NODE_DEPS
       ;;
 
     python)
-      ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${REMOTE_USER}@${REMOTE_HOST}" /bin/bash <<'PYTHON_DEPS'
+      ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${REMOTE_USER}@${REMOTE_HOST}" "cd '${REMOTE_PROJECT_DIR}' && /bin/bash" <<'PYTHON_DEPS'
 set -euo pipefail
-cd "${REMOTE_PROJECT_DIR}"
 
 if [ -f "requirements.txt" ]; then
   pip3 install -r requirements.txt
@@ -607,9 +616,8 @@ PYTHON_DEPS
       ;;
 
     ruby)
-      ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${REMOTE_USER}@${REMOTE_HOST}" /bin/bash <<'RUBY_DEPS'
+      ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${REMOTE_USER}@${REMOTE_HOST}" "cd '${REMOTE_PROJECT_DIR}' && /bin/bash" <<'RUBY_DEPS'
 set -euo pipefail
-cd "${REMOTE_PROJECT_DIR}"
 
 if [ -f "Gemfile" ]; then
   bundle install --without development test --deployment
@@ -621,9 +629,8 @@ RUBY_DEPS
       ;;
 
     php)
-      ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${REMOTE_USER}@${REMOTE_HOST}" /bin/bash <<'PHP_DEPS'
+      ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${REMOTE_USER}@${REMOTE_HOST}" "cd '${REMOTE_PROJECT_DIR}' && /bin/bash" <<'PHP_DEPS'
 set -euo pipefail
-cd "${REMOTE_PROJECT_DIR}"
 
 if [ -f "composer.json" ]; then
   if command -v composer >/dev/null 2>&1; then
@@ -658,11 +665,16 @@ PHP_DEPS
 ########################################
 # Start application
 ########################################
+########################################
+# Start application
+########################################
 start_application() {
   info "Starting application"
   
   case "$APP_TYPE" in
     node)
+      # Get the start command locally first
+      START_CMD=$(get_start_command)
       ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${REMOTE_USER}@${REMOTE_HOST}" /bin/bash <<NODE_START
 set -euo pipefail
 cd "${REMOTE_PROJECT_DIR}"
@@ -674,9 +686,8 @@ pm2 delete "${REPO_NAME}" 2>/dev/null || true
 if [ -f "ecosystem.config.js" ] || [ -f "ecosystem.config.json" ]; then
   pm2 start ecosystem.config.js --env production
 else
-  # Create simple PM2 config
-  START_CMD=\$(get_start_command)
-  pm2 start "\$START_CMD" --name "${REPO_NAME}"
+  # Use the pre-determined start command
+  pm2 start "$START_CMD" --name "${REPO_NAME}"
 fi
 
 pm2 save
@@ -685,6 +696,8 @@ NODE_START
       ;;
 
     python|ruby|php)
+      # Get the start command locally first
+      START_CMD=$(get_start_command)
       ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${REMOTE_USER}@${REMOTE_HOST}" /bin/bash <<SYSTEMD_START
 set -euo pipefail
 
